@@ -1,0 +1,30 @@
+{
+  "protocol": 1,
+  "name": "Windows 快捷键速查",
+  "version": "1.0.0",
+  "contributions": [
+    {
+      "point": "desktop.cards",
+      "version": 1,
+      "data": {
+        "cards": [
+          {
+            "title": "区域截图",
+            "value": "Win + Shift + S",
+            "detail": "选择要截取的区域，然后用 Ctrl + V 粘贴。"
+          },
+          {
+            "title": "任务视图",
+            "value": "Win + Tab",
+            "detail": "查看打开的窗口，创建或切换虚拟桌面。"
+          },
+          {
+            "title": "显示桌面",
+            "value": "Win + D",
+            "detail": "暂时收起窗口，再按一次恢复窗口。"
+          }
+        ]
+      }
+    }
+  ]
+}
