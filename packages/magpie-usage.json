@@ -1,0 +1,43 @@
+{
+  "protocol": 1,
+  "name": "Magpie 数据面板",
+  "version": "1.0.0",
+  "contributions": [
+    {
+      "point": "desktop.cards",
+      "version": 2,
+      "data": {
+        "cards": [
+          {
+            "title": "Magpie 数据面板",
+            "value": "等待同步",
+            "detail": "启动本地发布器即可在一张磁贴内实时汇总全部数据",
+            "state": "setup",
+            "badge": "未连接",
+            "blocks": [
+              {
+                "type": "metrics",
+                "title": "同步内容",
+                "items": [
+                  {
+                    "label": "今日用量 & Token",
+                    "value": "实时汇总",
+                    "sub": "费用 · 请求 · 输入/输出/缓存",
+                    "tone": "accent"
+                  },
+                  {
+                    "label": "模型占比 & 配额",
+                    "value": "可视化",
+                    "sub": "占比彩条 · 订阅剩余进度",
+                    "tone": "teal"
+                  }
+                ]
+              }
+            ],
+            "footer": "运行 publishers/magpie-usage/publish-magpie-usage.ps1 -InstallTask"
+          }
+        ]
+      }
+    }
+  ]
+}

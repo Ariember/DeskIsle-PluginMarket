@@ -1,6 +1,6 @@
 # DeskIsle 插件市场
 
-这个仓库为 DeskIsle 提供可直接安装的桌面卡片。首个插件「Windows 快捷键速查」包含区域截图、任务视图和显示桌面三张卡片。
+这个仓库为 DeskIsle 提供可直接安装的桌面卡片及配套动态发布器，目前收录「Windows 快捷键速查」与「Magpie 数据面板」（配套本地发布器见 `publishers/magpie-usage/`）。
 
 ## 安装插件
 

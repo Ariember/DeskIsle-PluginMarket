@@ -7,6 +7,13 @@
       "version": "1.0.0",
       "description": "在桌面查看区域截图、任务视图和显示桌面的 Windows 快捷键。",
       "sha256": "008411c7387f82354e611df6ee1c714686da1fd83c96f7b3da0d4e0a406236d4"
+    },
+    {
+      "id": "magpie-usage",
+      "name": "Magpie 数据面板",
+      "version": "1.0.0",
+      "description": "读取本机 Magpie 网关数据，在桌面磁贴展示今日用量、Token 拆解、模型占比与订阅配额（需运行配套本地发布器实时同步）。",
+      "sha256": "5d39e724bf00de73560e7908893cad0a6831d6d5bddda5312a70a93a42874635"
     }
   ]
 }
