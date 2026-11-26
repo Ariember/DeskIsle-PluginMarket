@@ -1,6 +1,6 @@
 # DeskIsle 插件市场
 
-这个仓库为 DeskIsle 提供可直接安装的桌面卡片及配套动态发布器，目前收录「Windows 快捷键速查」与「Magpie 数据面板」（配套本地发布器见 `publishers/magpie-usage/`）。
+目前市场仅收录「Magpie 数据面板」。安装后，运行[配套本地发布器](publishers/magpie-usage/)即可同步桌面卡片数据。
 
 ## 安装插件
 
@@ -12,12 +12,12 @@
 
 ```powershell
 .\deskisle.exe plugins list | ConvertFrom-Json
-.\deskisle.exe plugins install deskisle-windows-shortcuts
+.\deskisle.exe plugins install magpie-usage
 ```
 
 ## 提交插件
 
-1. 在 `packages/<id>.json` 编写 UTF-8 插件文档，使用宿主支持的扩展点。请为包选择稳定 ID。例如 `packages/deskisle-windows-shortcuts.json`。
+1. 在 `packages/<id>.json` 编写 UTF-8 插件文档，使用宿主支持的扩展点。请为包选择稳定 ID。例如 `packages/magpie-usage.json`。
 2. 运行 `deskisle.exe plugins validate <id> packages/<id>.json` 校验包。在 `index.json` 的 `plugins` 数组添加带 `id`、`description` 的条目。升级时沿用 ID 并更新包内的 `version`。
 3. 在市场根目录运行 `pwsh -File ./update-index.ps1`，将包内的名称、版本及实际文件字节的 SHA-256 写入索引。运行 `pwsh -File ./update-index.ps1 -Check` 核对索引，然后把索引和包放在同一个提交里。
 4. 向本仓库提交 Pull Request。维护者合并后，以该提交创建形如 `v1.1.0` 的新标签，并在 GitHub 发布正式 Release。用户下次浏览或刷新市场时即可发现新内容。已发布标签应保留原内容，修订时发布新标签。
