@@ -4,9 +4,9 @@
     {
       "id": "magpie-usage",
       "name": "Magpie 数据面板",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "description": "读取本机 Magpie 网关数据，在桌面磁贴展示今日用量、Token 拆解、模型占比与订阅配额（需运行配套本地发布器实时同步）。",
-      "sha256": "5d39e724bf00de73560e7908893cad0a6831d6d5bddda5312a70a93a42874635"
+      "sha256": "78556270364c16e6c7e89af17e03f0a380278a4ae72d4b1a7e016f56a4cf1ad3"
     }
   ]
 }

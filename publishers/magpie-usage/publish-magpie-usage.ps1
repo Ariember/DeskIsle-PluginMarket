@@ -3,16 +3,16 @@
     DeskIsle Magpie 高密度数据面板发布器（DeskIsle 插件协议 v1 / desktop.cards v2）。
 
 .DESCRIPTION
-    从本机（或指定地址）Magpie 网关读取用量与订阅配额，合成 1 张高密度液态玻璃桌面卡片：
+    从本机（或指定地址）Magpie 网关读取用量与订阅额度，生成一张桌面卡片：
       - 顶部主读数：今日费用 / 请求数 / 会话数 / 错误数 + 右上角周期与时间胶囊
       - TOKEN 统计：双列紧凑指标格（总 Token 含输入/输出 + 缓存命中率含缓读/缓写）
-      - 模型占比：多色分段占比条 + Top 模型图例
+      - 模型占比：按模型标注名称和百分比的灰色进度条
       - 订阅配额：各订阅账号剩余百分比进度条与重置倒计时
     通过原子替换写入 %APPDATA%\DeskIsle\plugins\magpie-usage.json（或指定目录）。
 
 .EXAMPLE
     # 单次同步到 DeskIsle 桌面卡片
-    pwsh -File .\publish-magpie-usage.ps1
+    pwsh -File .\publish-magpie-usage.ps1 -Once
 
 .EXAMPLE
     # 使用近 7 日统计刷新桌面卡片
@@ -46,7 +46,7 @@ param(
     [string]$OutputDir,
 
     [ValidateRange(1, 30)]
-    [int]$TimeoutSeconds = 5,
+    [int]$TimeoutSeconds = 15,
 
     [ValidatePattern('^[a-z0-9][a-z0-9-]{0,63}$')]
     [string]$PluginId = 'magpie-usage'
@@ -55,7 +55,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $Script:PluginName = 'Magpie 数据面板'
-$Script:PluginVersion = '1.0.0'
+$Script:PluginVersion = '1.1.0'
 $Script:TaskName = 'DeskIsle-Magpie-Usage'
 
 function Get-DefaultPluginsDir {
@@ -113,7 +113,7 @@ function Invoke-MagpieJson {
     $request = [System.Net.HttpWebRequest]::Create($Url)
     $request.Method = 'GET'
     $request.Accept = 'application/json'
-    $request.UserAgent = 'DeskIsle-Magpie-Usage/1.0.0'
+    $request.UserAgent = "DeskIsle-Magpie-Usage/$Script:PluginVersion"
     $request.Timeout = $TimeoutSec * 1000
     $request.ReadWriteTimeout = $TimeoutSec * 1000
     $request.AllowAutoRedirect = $false
@@ -326,8 +326,8 @@ function Build-MagpieCards {
 
     # 1. Hero section: Usage overview (cost + calls + sessions + errors)
     if ($calls -eq 0) {
-        $heroValue = '$0.00'
-        $heroDetail = "${periodLabel}暂无调用 · 0 会话"
+        $heroValue = if ($PeriodKey -eq 'today') { '今天还没有请求' } else { "${periodLabel}暂无请求" }
+        $heroDetail = '统计网关调用与 Agent 会话日志。'
     } else {
         if ($cost -gt 0) {
             $heroValue = Format-CostUsd -Amount $cost
@@ -351,7 +351,6 @@ function Build-MagpieCards {
     # 2. Block 1 (metrics): Token summary & cache efficiency
     $tokTotalStr = Format-TokenCount -Count $totalTokens
     $tokSub = "入 $(Format-TokenCount $inputTok) · 出 $(Format-TokenCount $outputTok)"
-    $tokTone = if ($totalTokens -gt 0) { 'accent' } else { 'neutral' }
 
     $cacheDenom = $inputTok + $cacheRead + $cacheWrite
     if ($cacheRead -gt 0 -and $cacheDenom -gt 0) {
@@ -364,19 +363,18 @@ function Build-MagpieCards {
         } else {
             "读 $(Format-TokenCount $cacheRead)"
         }
-        $cacheTone = if ($hitRatio -ge 0.7) { 'good' } elseif ($hitRatio -ge 0.3) { 'teal' } else { 'neutral' }
         $rightMetric = [ordered]@{
             label = '缓存命中'
             value = Sanitize-CardText $cacheVal 32
             sub   = Sanitize-CardText $cacheSub 48
-            tone  = $cacheTone
+            tone  = 'neutral'
         }
     } elseif ($reasoning -gt 0) {
         $rightMetric = [ordered]@{
             label = '推理 Token'
             value = Sanitize-CardText (Format-TokenCount $reasoning) 32
             sub   = Sanitize-CardText "缓写 $(Format-TokenCount $cacheWrite)" 48
-            tone  = 'purple'
+            tone  = 'neutral'
         }
     } else {
         $rightMetric = [ordered]@{
@@ -389,37 +387,27 @@ function Build-MagpieCards {
 
     $metricsBlock = [ordered]@{
         type  = 'metrics'
-        title = 'TOKEN 统计'
+        title = 'Token 用量'
         items = @(
             [ordered]@{
                 label = '总 Token'
                 value = Sanitize-CardText $tokTotalStr 32
                 sub   = Sanitize-CardText $tokSub 48
-                tone  = $tokTone
+                tone  = 'neutral'
             },
             $rightMetric
         )
     }
 
-    # 3. Block 2 (segments): Model distribution ratio bar + legend
-    $modelsRaw = @()
-    if ($null -ne $Usage -and $null -ne $Usage.models) {
-        $modelsRaw = @($Usage.models)
+    $blocks = [System.Collections.Generic.List[object]]::new()
+    if ($calls -gt 0) {
+        $blocks.Add($metricsBlock)
     }
-    $segmentPalette = @('accent', 'purple', 'teal', 'warn', 'neutral')
-    $segmentItems = [System.Collections.Generic.List[object]]::new()
-    $segmentNote = ''
 
-    if ($modelsRaw.Count -eq 0 -or $calls -eq 0) {
-        $segmentNote = '暂无记录'
-        $segmentItems.Add([ordered]@{
-            label = "${periodLabel}尚无模型调用"
-            share = 0
-            value = '0%'
-            tone  = 'neutral'
-        })
-    } else {
-        $ranked = @(foreach ($m in $modelsRaw) {
+    # Each model gets a labelled bar so its share can be read without a colour key.
+    if ($calls -gt 0 -and $null -ne $Usage.models -and @($Usage.models).Count -gt 0) {
+        $modelMeters = [System.Collections.Generic.List[object]]::new()
+        $ranked = @(foreach ($m in $Usage.models) {
             $mTokens = (Get-NumericProp $m 'input') + (Get-NumericProp $m 'output') + (Get-NumericProp $m 'cache_read') + (Get-NumericProp $m 'cache_write')
             $mCalls = Get-NumericProp $m 'calls'
             $displayName = if ($m.name) { [string]$m.name } elseif ($m.model) { [string]$m.model } else { [string]$m.id }
@@ -437,7 +425,6 @@ function Build-MagpieCards {
             $ranked = @($ranked | Sort-Object -Property @{ Expression = 'Calls'; Descending = $true })
         }
 
-        $segmentNote = "共 $($ranked.Count) 个模型"
         $maxVisible = if ($ranked.Count -gt 3) { 2 } else { $ranked.Count }
         $shownRatio = 0.0
         for ($i = 0; $i -lt $maxVisible; $i++) {
@@ -449,11 +436,11 @@ function Build-MagpieCards {
                 $shareInt = 1
             }
             if ($shareInt -gt 100) { $shareInt = 100 }
-            $segmentItems.Add([ordered]@{
+            $modelMeters.Add([ordered]@{
                 label = Sanitize-CardText (Get-ShortModelName -Name $item.Name -MaxChars 9) 32
-                share = $shareInt
+                percent = $shareInt
                 value = Sanitize-CardText (Format-Percent $ratio) 24
-                tone  = $segmentPalette[$i % $segmentPalette.Count]
+                tone  = 'neutral'
             })
         }
         if ($ranked.Count -gt 3) {
@@ -463,20 +450,18 @@ function Build-MagpieCards {
                 $restShare = 1
             }
             if ($restShare -gt 100) { $restShare = 100 }
-            $segmentItems.Add([ordered]@{
+            $modelMeters.Add([ordered]@{
                 label = '其他'
-                share = $restShare
+                percent = $restShare
                 value = Sanitize-CardText (Format-Percent $restRatio) 24
                 tone  = 'neutral'
             })
         }
-    }
-
-    $segmentsBlock = [ordered]@{
-        type  = 'segments'
-        title = '模型占比'
-        note  = Sanitize-CardText $segmentNote 32
-        items = @($segmentItems)
+        $blocks.Add([ordered]@{
+            type  = 'meters'
+            title = "模型占比 · 共 $($ranked.Count) 个"
+            items = $modelMeters.ToArray()
+        })
     }
 
     # 4. Block 3 (meters): Subscription quotas progress bars
@@ -487,7 +472,7 @@ function Build-MagpieCards {
             value   = '读取失败'
             detail  = Sanitize-CardText $QuotasError 48
             percent = 0
-            tone    = 'danger'
+            tone    = 'neutral'
         })
     } else {
         $quotaEntries = @()
@@ -521,14 +506,17 @@ function Build-MagpieCards {
             $rem = [int][Math]::Round([double]$tightest.remaining)
             if ($rem -lt 0) { $rem = 0 }
             if ($rem -gt 100) { $rem = 100 }
-            $resetStr = ''
-            if ($null -ne $tightest.PSObject.Properties['resetsAt'] -and $tightest.resetsAt) {
-                $resetStr = Format-ResetCountdown -IsoTimestamp ([string]$tightest.resetsAt) -Now $Now
+            $detail = ''
+            if ($q.asOf) {
+                $sampleTime = $q.asOf -as [datetimeoffset]
+                $detail = if ($null -eq $sampleTime) { '缓存读数' } else { '缓存 ' + $sampleTime.ToLocalTime().ToString('MM-dd HH:mm') }
+            } elseif ($tightest.resetsAt) {
+                $detail = Format-ResetCountdown -IsoTimestamp ([string]$tightest.resetsAt) -Now $Now
             }
             $summaries.Add([pscustomobject]@{
                 Name      = $provName
                 Remaining = $rem
-                Reset     = $resetStr
+                Detail    = $detail
             })
         }
 
@@ -545,30 +533,23 @@ function Build-MagpieCards {
             $qLimit = [Math]::Min($ordered.Count, 4)
             for ($i = 0; $i -lt $qLimit; $i++) {
                 $item = $ordered[$i]
-                $tone = if ($item.Remaining -le 15) {
-                    'danger'
-                } elseif ($item.Remaining -le 35) {
-                    'warn'
-                } else {
-                    'good'
-                }
                 $valLabel = if ($item.Remaining -le 0) { '已用尽' } else { "剩 $($item.Remaining)%" }
                 $meterItems.Add([ordered]@{
                     label   = Sanitize-CardText $item.Name 32
                     value   = Sanitize-CardText $valLabel 24
-                    detail  = Sanitize-CardText $item.Reset 48
+                    detail  = Sanitize-CardText $item.Detail 48
                     percent = $item.Remaining
-                    tone    = $tone
+                    tone    = 'neutral'
                 })
             }
         }
     }
 
-    $metersBlock = [ordered]@{
+    $blocks.Add([ordered]@{
         type  = 'meters'
         title = '订阅配额'
-        items = @($meterItems)
-    }
+        items = $meterItems.ToArray()
+    })
 
     $card = [ordered]@{
         title  = Sanitize-CardText $Script:PluginName 64
@@ -576,7 +557,7 @@ function Build-MagpieCards {
         detail = Sanitize-CardText $heroDetail 160
         state  = 'ready'
         badge  = Sanitize-CardText "${periodLabel} · $updatedAt" 24
-        blocks = @($metricsBlock, $segmentsBlock, $metersBlock)
+        blocks = $blocks.ToArray()
     }
 
     return , @($card)
@@ -725,6 +706,7 @@ function Install-PublisherTask {
         '-Watch',
         '-Period', $Period,
         '-IntervalSeconds', $IntervalSeconds,
+        '-TimeoutSeconds', $TimeoutSeconds,
         '-PluginId', $PluginId
     )
     if (-not [string]::IsNullOrWhiteSpace($Endpoint)) {
@@ -761,6 +743,41 @@ function Uninstall-PublisherTask {
     }
 }
 
+function Start-MagpiePublisher {
+    param([string]$BaseUrl, [string]$PluginsDir)
+
+    $poll = $Watch -or (-not $Once -and -not $DryRun)
+    $mutex = $null
+    if ($poll) {
+        $createdNew = $false
+        $mutex = [System.Threading.Mutex]::new($true, "Local\DeskIsle-$PluginId-Publisher", [ref]$createdNew)
+        if (-not $createdNew) {
+            $mutex.Dispose()
+            Write-Output "已有运行中的发布器实例（$PluginId），退出重复进程。"
+            return
+        }
+        if (-not $DryRun) {
+            Write-Output "正在持续同步 Magpie（间隔：${IntervalSeconds}s），按 Ctrl+C 停止。"
+        }
+    }
+    try {
+        do {
+            $res = Publish-Once -BaseUrl $BaseUrl -BearerKey $ApiKey -PeriodKey $Period -TimeoutSec $TimeoutSeconds -PluginsDir $PluginsDir -Id $PluginId -Dry:$DryRun
+            if ($DryRun) {
+                Write-Output $res.Json
+            } elseif (-not $poll) {
+                Write-Output "已发布 Magpie 数据面板（状态：$($res.Status)，卡片数：$($res.CardCount)）-> $($res.Path)"
+            }
+            if ($poll) { Start-Sleep -Seconds $IntervalSeconds }
+        } while ($poll)
+    } finally {
+        if ($null -ne $mutex) {
+            $mutex.ReleaseMutex()
+            $mutex.Dispose()
+        }
+    }
+}
+
 # Only execute CLI entrypoint when invoked directly (allows dot-sourcing for tests).
 if ($MyInvocation.InvocationName -ne '.') {
     $pluginsDir = Get-DefaultPluginsDir
@@ -792,32 +809,5 @@ if ($MyInvocation.InvocationName -ne '.') {
     }
 
     $baseUrl = Resolve-MagpieEndpoint -ExplicitEndpoint $Endpoint
-
-    if ($Watch) {
-        $createdNew = $false
-        $mutex = [System.Threading.Mutex]::new($true, "Local\DeskIsle-$PluginId-Publisher", [ref]$createdNew)
-        if (-not $createdNew) {
-            Write-Output "已有运行中的发布器实例（$PluginId），退出重复进程。"
-            exit 0
-        }
-        try {
-            while ($true) {
-                $res = Publish-Once -BaseUrl $baseUrl -BearerKey $ApiKey -PeriodKey $Period -TimeoutSec $TimeoutSeconds -PluginsDir $pluginsDir -Id $PluginId -Dry:$DryRun
-                if ($DryRun) {
-                    Write-Output $res.Json
-                }
-                Start-Sleep -Seconds $IntervalSeconds
-            }
-        } finally {
-            $mutex.ReleaseMutex()
-            $mutex.Dispose()
-        }
-    } else {
-        $res = Publish-Once -BaseUrl $baseUrl -BearerKey $ApiKey -PeriodKey $Period -TimeoutSec $TimeoutSeconds -PluginsDir $pluginsDir -Id $PluginId -Dry:$DryRun
-        if ($DryRun) {
-            Write-Output $res.Json
-        } else {
-            Write-Output "已发布 Magpie 数据面板（状态：$($res.Status)，卡片数：$($res.CardCount)）-> $($res.Path)"
-        }
-    }
+    Start-MagpiePublisher -BaseUrl $baseUrl -PluginsDir $pluginsDir
 }

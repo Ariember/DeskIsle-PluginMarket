@@ -93,12 +93,12 @@ Assert-Equal $metrics.type 'metrics' 'block1 type'
 Assert-Equal $metrics.items[0].value '267M' 'total tokens'
 Assert-Equal $metrics.items[1].value '93%' 'cache hit rate'
 
-$segments = $card.blocks[1]
-Assert-Equal $segments.type 'segments' 'block2 type'
-Assert-Equal $segments.items.Count 3 '3 model segments'
-Assert-Equal $segments.items[0].label 'opus-5-5' 'top model label'
-Assert-Equal $segments.items[0].share 92 'top model share'
-Assert-Equal $segments.items[2].value '<1%' 'small model pct label'
+$models = $card.blocks[1]
+Assert-Equal $models.type 'meters' 'labelled model bars'
+Assert-Equal $models.items.Count 3 '3 models'
+Assert-Equal $models.items[0].label 'opus-5-5' 'top model label'
+Assert-Equal $models.items[0].percent 92 'top model share'
+Assert-Equal $models.items[2].value '<1%' 'small model pct label'
 
 $meters = $card.blocks[2]
 Assert-Equal $meters.type 'meters' 'block3 type'
@@ -106,7 +106,14 @@ Assert-Equal $meters.items.Count 2 '2 quota meters'
 Assert-Equal $meters.items[0].label 'Codex' 'tightest quota first'
 Assert-Equal $meters.items[0].value '剩 6%' 'codex value'
 Assert-Equal $meters.items[0].detail '17分重置' 'codex reset'
-Assert-Equal $meters.items[0].tone 'danger' 'codex danger tone'
+foreach ($block in $card.blocks) {
+    foreach ($item in $block.items) {
+        Assert-Equal $item.tone 'neutral' 'neutral palette'
+    }
+}
+$quotasActive.data[0] | Add-Member -NotePropertyName asOf -NotePropertyValue $now
+$cachedCard = (Build-MagpieCards -Usage $usageActive -Quotas $quotasActive -Now $now)[0]
+Assert-Equal $cachedCard.blocks[2].items[0].detail ('缓存 ' + $now.ToLocalTime().ToString('MM-dd HH:mm')) 'cached quota sample time'
 
 # 3. Zero usage fixture
 $usageZero = [pscustomobject]@{
@@ -114,10 +121,12 @@ $usageZero = [pscustomobject]@{
 }
 $zeroCards = Build-MagpieCards -Usage $usageZero -Quotas ([pscustomobject]@{ data = @() }) -PeriodKey 'today' -Now $now
 Assert-Equal $zeroCards.Count 1 'zero combined card'
-Assert-Equal $zeroCards[0].value '$0.00' 'zero hero cost'
-Assert-Equal $zeroCards[0].blocks[0].items[0].value '0' 'zero tokens'
-Assert-Equal $zeroCards[0].blocks[1].items[0].share 0 'zero model share'
-Assert-Equal $zeroCards[0].blocks[2].items[0].value '暂无配额' 'zero quota'
+Assert-Equal $zeroCards[0].value '今天还没有请求' 'today empty state'
+Assert-Equal $zeroCards[0].blocks.Count 1 'empty usage only shows quotas'
+Assert-Equal $zeroCards[0].blocks[0].items[0].value '暂无配额' 'zero quota'
+$weekCard = (Build-MagpieCards -Usage $usageZero -Quotas $quotasActive -PeriodKey '7d' -Now $now)[0]
+Assert-Equal $weekCard.value '近7日暂无请求' 'selected period empty state'
+Assert-Equal $weekCard.blocks[0].items[0].value '剩 6%' 'quota visible without requests'
 
 # 4. Atomic write + DeskIsle v2 CLI protocol validation
 $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("deskisle-magpie-test-" + [guid]::NewGuid().ToString('N'))
@@ -131,6 +140,45 @@ try {
     Assert-True (Test-Path -LiteralPath $p1) 'atomic write active'
     $p2 = Write-PluginDocumentAtomic -PluginsDir $tempRoot -Id 'magpie-usage' -JsonContent $docError
     Assert-Equal $p1 $p2 'atomic replace path'
+
+    # Poll through a temporary quota failure. Inspect the file DeskIsle would read
+    # after each publication, with the gateway and the timer replaced in this scope.
+    & {
+        $PluginId = 'test-' + [guid]::NewGuid().ToString('N')
+        $published = [System.Collections.Generic.List[object]]::new()
+        $requests = [System.Collections.Generic.List[string]]::new()
+        function Invoke-MagpieJson {
+            param($Url, $BearerKey, $TimeoutSec)
+            $requests.Add($Url)
+            if ($Url -eq 'http://fixture/v1/magpie/usage?period=today') {
+                return [pscustomobject]@{ calls = 10 + $published.Count; cost = 2 + $published.Count }
+            }
+            if ($Url -ne 'http://fixture/v1/magpie/quotas') { throw "意外的地址 $Url" }
+            if ($published.Count -eq 1) { throw '模拟额度读取失败' }
+            return [pscustomobject]@{ data = @(@{ name = 'Codex'; windows = @(
+                [pscustomobject]@{ remaining = 90 - $published.Count }
+            ) }) }
+        }
+        function Start-Sleep {
+            param($Seconds)
+            Assert-Equal $Seconds 15 'default poll interval'
+            $published.Add((Get-Content -Raw -Encoding UTF8 (Join-Path $tempRoot "$PluginId.json") | ConvertFrom-Json))
+            if ($published.Count -eq 3) { throw [OperationCanceledException]::new('结束模拟轮询') }
+        }
+        try { Start-MagpiePublisher -BaseUrl 'http://fixture' -PluginsDir $tempRoot }
+        catch [OperationCanceledException] {}
+        Assert-Equal $requests.Count 6 'usage and quotas requested every cycle'
+        Assert-Equal $published.Count 3 'default publisher keeps polling'
+        $cardsRead = @($published | ForEach-Object { $_.contributions[0].data.cards[0] })
+        Assert-Equal $cardsRead[0].blocks[-1].items[0].percent 90 'initial quota'
+        Assert-Equal $cardsRead[1].blocks[-1].items[0].value '读取失败' 'failed quota replaces old value'
+        Assert-Equal $cardsRead[2].blocks[-1].items[0].percent 88 'quota recovers on next poll'
+        Assert-True ($cardsRead[2].detail.Contains('12 次请求')) 'usage also updates on next poll'
+
+        $Once = $true
+        Start-MagpiePublisher -BaseUrl 'http://fixture' -PluginsDir $tempRoot | Out-Null
+        Assert-Equal $requests.Count 8 'explicit once queries each endpoint once'
+    }
 
     if ([string]::IsNullOrWhiteSpace($DeskIsleExe)) {
         $candidate = Join-Path (Split-Path (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent) -Parent) 'DeskIsle\target\release\deskisle.exe'
